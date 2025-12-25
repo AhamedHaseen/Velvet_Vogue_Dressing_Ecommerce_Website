@@ -1,0 +1,1 @@
+<!-- Common Admin Footer -->
