@@ -14,9 +14,7 @@ if ($result->num_rows == 0) {
 
 // Handle form submission
 if ($_SERVER["REQUEST_METHOD"] == "GET" && !empty($_GET)) {
-    // Debug: Check if form data is received
-    // error_log("Form submitted with data: " . print_r($_GET, true));
-    
+        
     // Get form data
     $first_name = trim($_GET['firstName'] ?? '');
     $last_name = trim($_GET['lastName'] ?? '');
