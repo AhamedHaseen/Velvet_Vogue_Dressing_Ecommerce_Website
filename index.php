@@ -1,10 +1,5 @@
 <?php
-/**
- * Velvet Vogue E-Commerce - Homepage
- * Dynamic content loaded from database using arrays
- */
 
-// Enable error reporting for development
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
