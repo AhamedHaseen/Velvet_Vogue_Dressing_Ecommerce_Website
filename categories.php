@@ -684,6 +684,18 @@ if ($product_result) {
           }
         }).then((result) => {
           if (result.isConfirmed) {
+            // Show loading
+            Swal.fire({
+              title: 'Updating...',
+              text: 'Please wait while we update the category.',
+              allowOutsideClick: false,
+              allowEscapeKey: false,
+              showConfirmButton: false,
+              didOpen: () => {
+                Swal.showLoading();
+              }
+            });
+
             const formData = new FormData();
             formData.append('action', 'edit');
             formData.append('categoryId', id);
@@ -692,11 +704,24 @@ if ($product_result) {
             formData.append('categoryStatus', result.value.status);
             formData.append('sortOrder', result.value.sortOrder);
             
-            fetch('', {
+            fetch(window.location.href, {
               method: 'POST',
               body: formData
+            }).then(response => {
+              if (response.ok) {
+                return response.text();
+              }
+              throw new Error('Network response was not ok');
             }).then(() => {
               location.reload();
+            }).catch(error => {
+              console.error('Error:', error);
+              Swal.fire({
+                icon: 'error',
+                title: 'Error!',
+                text: 'Failed to update category. Please try again.',
+                confirmButtonText: 'OK'
+              });
             });
           }
         });
@@ -715,15 +740,41 @@ if ($product_result) {
           cancelButtonText: 'Cancel'
         }).then((result) => {
           if (result.isConfirmed) {
+            // Show loading
+            Swal.fire({
+              title: 'Deleting...',
+              text: 'Please wait while we delete the category.',
+              allowOutsideClick: false,
+              allowEscapeKey: false,
+              showConfirmButton: false,
+              didOpen: () => {
+                Swal.showLoading();
+              }
+            });
+
             const formData = new FormData();
             formData.append('action', 'delete');
             formData.append('categoryId', id);
             
-            fetch('', {
+            fetch(window.location.href, {
               method: 'POST',
               body: formData
+            }).then(response => {
+              if (response.ok) {
+                return response.text();
+              }
+              throw new Error('Network response was not ok');
             }).then(() => {
+              // Success - reload the page
               location.reload();
+            }).catch(error => {
+              console.error('Error:', error);
+              Swal.fire({
+                icon: 'error',
+                title: 'Error!',
+                text: 'Failed to delete category. Please try again.',
+                confirmButtonText: 'OK'
+              });
             });
           }
         });

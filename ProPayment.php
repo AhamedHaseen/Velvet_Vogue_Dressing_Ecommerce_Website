@@ -295,8 +295,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
                 $subtotal = $standardFormTotals['subtotal'];
                 $shipping = $standardFormTotals['shipping'];
                 $tax = $standardFormTotals['tax'];
+            $total = $standardFormTotals['total'];
             
-            $total = $subtotal + $shipping + $tax;
+            // Initialize discount variable for standard form
+            $discount = 0;
             
             // Generate unique order number
             $orderNumber = 'ORD-' . date('Y') . '-' . str_pad(mt_rand(1, 99999), 5, '0', STR_PAD_LEFT);
@@ -324,7 +326,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
                     // Insert order (with order number, user_id and discount if available)
                     $orderStmt = $conn->prepare("INSERT INTO payment_orders (billing_id, user_id, order_number, subtotal, shipping, tax, discount, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
                     if ($orderStmt) {
-                        $orderStmt->bind_param("iisddddd", $billingId, $user_id, $orderNumber, $subtotal, $shipping, $tax, 0, $total);
+                        $orderStmt->bind_param("iisddddd", $billingId, $user_id, $orderNumber, $subtotal, $shipping, $tax, $discount, $total);
                         
                         if ($orderStmt->execute()) {
                             $orderId = $conn->insert_id;
@@ -564,6 +566,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
         $shipping = $orderTotals['shipping'];
         $tax = $orderTotals['tax'];
         $total = $orderTotals['total'];
+        
+        // Initialize discount variable
+        $discount = 0;
         
         // Debug: Log the calculated totals
         error_log("Calculated totals - Subtotal: $subtotal, Shipping: $shipping, Tax: $tax, Total: $total");

@@ -1,9 +1,30 @@
 <?php
 // Save Product Handler
+// Suppress PHP warnings that output HTML
+ini_set('display_errors', 0);
+error_reporting(0);
+
+// Start output buffering to control output
+ob_start();
+
+// Set JSON header first
 header('Content-Type: application/json');
 
-// Include database connection
-include "db_connection.php";
+// Include database connection with error handling
+try {
+    include "db_connection.php";
+} catch (Exception $e) {
+    ob_clean(); // Clear any output before JSON
+    echo json_encode(['success' => false, 'message' => 'Database connection failed. Please start XAMPP MySQL service.']);
+    exit;
+} catch (Error $e) {
+    ob_clean(); // Clear any output before JSON
+    echo json_encode(['success' => false, 'message' => 'Database connection failed. Please start XAMPP MySQL service.']);
+    exit;
+}
+
+// Clean any unwanted output before proceeding
+ob_clean();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -150,7 +171,7 @@ try {
         } else {
             $sql = "UPDATE products SET product_name = ?, product_slug = ?, category_id = ?, price = ?, original_price = ?, stock_quantity = ?, is_featured = ? WHERE product_id = ?";
             $stmt = $conn->prepare($sql);
-            $stmt->bind_param("ssiddiiii", 
+            $stmt->bind_param("ssiddiii", 
                 $name, $product_slug, $category_id, $price, $compare_price, $inventory, $is_featured, $product_id
             );
         }
@@ -165,12 +186,14 @@ try {
                 $desc_stmt->close();
             }
             
+            ob_clean(); // Ensure clean output
             echo json_encode([
                 'success' => true, 
                 'message' => 'Product updated successfully',
                 'product_id' => $product_id
             ]);
         } else {
+            ob_clean(); // Ensure clean output
             echo json_encode(['success' => false, 'message' => 'Database error: ' . $stmt->error]);
         }
     } else {
@@ -200,12 +223,14 @@ try {
                 }
             }
             
+            ob_clean(); // Ensure clean output
             echo json_encode([
                 'success' => true, 
                 'message' => 'Product added successfully',
                 'product_id' => $new_product_id
             ]);
         } else {
+            ob_clean(); // Ensure clean output
             echo json_encode(['success' => false, 'message' => 'Database error: ' . $stmt->error]);
         }
     }
