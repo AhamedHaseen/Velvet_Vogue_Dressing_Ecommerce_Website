@@ -2,6 +2,202 @@
 // Include session and database
 include 'includes/session_db.php';
 
+
+
+define('PAYPAL_CLIENT_ID', 'your-paypal-client-id-here'); 
+define('PAYPAL_CLIENT_SECRET', 'your-paypal-client-secret-here'); 
+define('PAYPAL_ENVIRONMENT', 'sandbox'); 
+
+// PayPal API URLs
+if (PAYPAL_ENVIRONMENT === 'sandbox') {
+    define('PAYPAL_API_URL', 'https://api-m.sandbox.paypal.com');
+    define('PAYPAL_WEB_URL', 'https://www.sandbox.paypal.com');
+} else {
+    define('PAYPAL_API_URL', 'https://api-m.paypal.com');
+    define('PAYPAL_WEB_URL', 'https://www.paypal.com');
+}
+
+// PayPal API Helper Functions
+function getPayPalAccessToken() {
+    $url = PAYPAL_API_URL . '/v1/oauth2/token';
+    
+    $data = 'grant_type=client_credentials';
+    $auth = base64_encode(PAYPAL_CLIENT_ID . ':' . PAYPAL_CLIENT_SECRET);
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Accept: application/json',
+        'Accept-Language: en_US',
+        'Authorization: Basic ' . $auth,
+        'Content-Type: application/x-www-form-urlencoded'
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode === 200) {
+        $responseData = json_decode($response, true);
+        return $responseData['access_token'];
+    }
+    
+    return false;
+}
+
+function createPayPalOrder($amount, $currency = 'USD', $orderDetails = []) {
+    $accessToken = getPayPalAccessToken();
+    
+    if (!$accessToken) {
+        return false;
+    }
+    
+    $url = PAYPAL_API_URL . '/v2/checkout/orders';
+    
+    $orderData = [
+        'intent' => 'CAPTURE',
+        'purchase_units' => [[
+            'amount' => [
+                'currency_code' => $currency,
+                'value' => number_format($amount, 2, '.', '')
+            ],
+            'description' => $orderDetails['description'] ?? 'Velvet Vogue Order',
+            'soft_descriptor' => 'VELVET_VOGUE'
+        ]],
+        'application_context' => [
+            'return_url' => 'http://localhost/velvet_vogue_Ecommerce_WebPage/ProPayment.php?paypal_success=1',
+            'cancel_url' => 'http://localhost/velvet_vogue_Ecommerce_WebPage/ProPayment.php?paypal_cancel=1',
+            'brand_name' => 'Velvet Vogue',
+            'landing_page' => 'BILLING',
+            'shipping_preference' => 'SET_PROVIDED_ADDRESS',
+            'user_action' => 'PAY_NOW'
+        ]
+    ];
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($orderData));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $accessToken,
+        'PayPal-Request-Id: ' . uniqid()
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode === 201) {
+        return json_decode($response, true);
+    }
+    
+    return false;
+}
+
+function capturePayPalOrder($orderId) {
+    $accessToken = getPayPalAccessToken();
+    
+    if (!$accessToken) {
+        return false;
+    }
+    
+    $url = PAYPAL_API_URL . '/v2/checkout/orders/' . $orderId . '/capture';
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, '{}');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $accessToken
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode === 201) {
+        return json_decode($response, true);
+    }
+    
+    return false;
+}
+
+// Handle PayPal Success/Cancel
+if (isset($_GET['paypal_success']) && $_GET['paypal_success'] == '1') {
+    if (isset($_GET['token']) && isset($_GET['PayerID'])) {
+        // Capture the PayPal order
+        $paypalOrderId = $_GET['token'];
+        $captureResult = capturePayPalOrder($paypalOrderId);
+        
+        if ($captureResult && $captureResult['status'] === 'COMPLETED') {
+            // PayPal payment was successful
+            $paypalTransactionId = $captureResult['purchase_units'][0]['payments']['captures'][0]['id'];
+            $paypalAmount = $captureResult['purchase_units'][0]['payments']['captures'][0]['amount']['value'];
+            
+            
+            $successMessage = "PayPal payment completed successfully! Transaction ID: " . $paypalTransactionId;
+            $orderProcessed = true;
+            
+            // Clear cart after successful PayPal payment
+            if (isset($_SESSION['checkout_cart'])) {
+                unset($_SESSION['checkout_cart']);
+            }
+        } else {
+            $errorMessage = "PayPal payment capture failed. Please try again.";
+        }
+    }
+} elseif (isset($_GET['paypal_cancel']) && $_GET['paypal_cancel'] == '1') {
+    $errorMessage = "PayPal payment was cancelled. You can try again or choose a different payment method.";
+}
+
+// Handle PayPal Order Creation (AJAX)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_paypal_order') {
+    header('Content-Type: application/json');
+    
+    try {
+        $orderTotal = floatval($_POST['order_total'] ?? 0);
+        
+        if ($orderTotal <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid order total']);
+            exit;
+        }
+        
+        // Create PayPal order
+        $paypalOrder = createPayPalOrder($orderTotal, 'USD', [
+            'description' => 'Velvet Vogue E-commerce Purchase'
+        ]);
+        
+        if ($paypalOrder && isset($paypalOrder['id'])) {
+            // Store order details in session for later use
+            $_SESSION['pending_paypal_order'] = [
+                'paypal_order_id' => $paypalOrder['id'],
+                'amount' => $orderTotal,
+                'created_at' => time()
+            ];
+            
+            echo json_encode([
+                'success' => true,
+                'order_id' => $paypalOrder['id'],
+                'approve_url' => $paypalOrder['links'][1]['href'] // Approval URL
+            ]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Failed to create PayPal order']);
+        }
+    } catch (Exception $e) {
+        error_log("PayPal order creation error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'PayPal order creation failed']);
+    }
+    
+    exit;
+}
+
 // Check if user is logged in for enhanced order tracking
 $is_logged_in = isset($_SESSION['user_id']);
 $user_id = $is_logged_in ? $_SESSION['user_id'] : null;
@@ -104,70 +300,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
         $phone = $_POST['phone'] ?? '';
         $address = $_POST['address'] ?? '';
         $city = $_POST['city'] ?? '';
-        $state = $_POST['state'] ?? '';
         $zipCode = $_POST['zipCode'] ?? '';
-        $paymentMethod = $_POST['paymentMethod'] ?? 'card';
-        
-        // Card details (only process if card payment is selected)
-        $cardNumberLast4 = '';
-        $cardHolderName = '';
-        $cardExpiryMonth = '';
-        $cardExpiryYear = '';
-        $cardType = '';
-        
-        // Debug: Log what POST data we're receiving for card details
-        error_log("STANDARD FORM - Payment Method: " . $paymentMethod);
-        error_log("STANDARD FORM - POST cardNumber: " . ($_POST['cardNumber'] ?? 'NOT SET'));
-        error_log("STANDARD FORM - POST cardName: " . ($_POST['cardName'] ?? 'NOT SET'));
-        error_log("STANDARD FORM - POST expiryDate: " . ($_POST['expiryDate'] ?? 'NOT SET'));
-        error_log("STANDARD FORM - POST cvv: " . ($_POST['cvv'] ?? 'NOT SET'));
-        
-        // Process card details if any card information is provided (regardless of payment method)
-        $cardNumber = $_POST['cardNumber'] ?? '';
-        $cardHolderName = $_POST['cardName'] ?? '';
-        $expiryDate = $_POST['expiryDate'] ?? '';
-        $cvv = $_POST['cvv'] ?? '';
-        
-        if (!empty($cardNumber) || !empty($cardHolderName)) {
-            // Security: Only store last 4 digits of card number
-            if (!empty($cardNumber)) {
-                $cardNumberClean = preg_replace('/\D/', '', $cardNumber);
-                $cardNumberLast4 = substr($cardNumberClean, -4);
-                
-                // Determine card type based on first digit
-                $firstDigit = substr($cardNumberClean, 0, 1);
-                if ($firstDigit == '4') $cardType = 'Visa';
-                elseif ($firstDigit == '5') $cardType = 'Mastercard';
-                elseif ($firstDigit == '3') $cardType = 'American Express';
-                else $cardType = 'Other';
-            }
-            
-            // Parse expiry date (MM/YY format)
-            if (!empty($expiryDate) && strpos($expiryDate, '/') !== false) {
-                list($cardExpiryMonth, $cardExpiryYear) = explode('/', $expiryDate);
-                $cardExpiryYear = '20' . $cardExpiryYear; // Convert YY to YYYY
-            }
-        }
+        $paymentMethod = $_POST['paymentMethod'] ?? 'paypal';
         
         // Validate required fields
         $requiredFieldsEmpty = empty($firstName) || empty($lastName) || empty($email) || empty($phone) || 
-            empty($address) || empty($city) || empty($state) || empty($zipCode);
+            empty($address) || empty($city) || empty($zipCode);
         
-        // Only require card fields if card data was provided (allows flexibility in payment methods)
-        $cardFieldsEmpty = (!empty($cardNumber) || !empty($cardHolderName)) && (empty($cardNumber) || empty($cardHolderName) || empty($expiryDate) || empty($cvv));
-        
-        if ($requiredFieldsEmpty || $cardFieldsEmpty) {
-            $errorMessage = "Please fill in all required fields including card details.";
+        if ($requiredFieldsEmpty) {
+            $errorMessage = "Please fill in all required fields.";
         } else {
-            // Get current cart items for calculation first
+            
             $currentCartItems = [];
             
-            // Debug: Log what we're receiving
+            
             error_log("Standard form submission - GET params: " . print_r($_GET, true));
             error_log("Standard form submission - POST params: " . print_r($_POST, true));
             
-            // CRITICAL FIX: During POST submission, GET params may be lost
-            // Check if cart items are passed in POST data first, then fallback to GET
+            
             $cartItemsSource = '';
             $cartItemsParam = '';
             
@@ -181,11 +331,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
             
             error_log("CART FIX - Cart items source: " . $cartItemsSource . ", Value: " . $cartItemsParam);
             
-            // Try to get cart items from URL or POST first
+            
             if (!empty($cartItemsParam)) {
                 $cartItemIds = explode(',', $cartItemsParam);
                 
-                // Debug: Log cart processing
+               
                 error_log("CART DEBUG - cartItemsParam: " . $cartItemsParam);
                 error_log("CART DEBUG - cartItemIds: " . print_r($cartItemIds, true));
                 
@@ -245,9 +395,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
                 }
             }
             
-            // If no cart items from URL, try to get from session or hidden form data
+           
             if (empty($currentCartItems)) {
-                // Try to get cart data from hidden form field (localStorage)
+                
                 if (isset($_POST['hidden_cart_data']) && !empty($_POST['hidden_cart_data'])) {
                     $hiddenCartData = json_decode($_POST['hidden_cart_data'], true);
                     if ($hiddenCartData && is_array($hiddenCartData)) {
@@ -265,12 +415,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
                         error_log("Cart items loaded from hidden form data: " . count($currentCartItems) . " items");
                     }
                 }
-                // Try to get cart data from session
+                
                 else if (isset($_SESSION['checkout_cart']) && !empty($_SESSION['checkout_cart'])) {
                     $currentCartItems = $_SESSION['checkout_cart'];
                     error_log("Cart items loaded from session: " . count($currentCartItems) . " items");
                 } else {
-                    // Last resort: Get sample products but warn about it
+                    
                     error_log("Warning: No cart items found, using sample products");
                     $sampleQuery = "SELECT product_id, product_name, price, image_url FROM products WHERE is_active = 1 ORDER BY RAND() LIMIT 2";
                     $sampleResult = $conn->query($sampleQuery);
@@ -304,20 +454,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['cart_data'])) {
             $orderNumber = 'ORD-' . date('Y') . '-' . str_pad(mt_rand(1, 99999), 5, '0', STR_PAD_LEFT);
             
             // Insert billing information
-            $billingStmt = $conn->prepare("INSERT INTO payment_billing_info (first_name, last_name, email, phone, address, city, state, zip_code, payment_method, card_number_last4, card_holder_name, card_expiry_month, card_expiry_year, card_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $billingStmt = $conn->prepare("INSERT INTO payment_billing_info (first_name, last_name, email, phone, address, city, zip_code, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
             
             if ($billingStmt) {
-                // Debug: Log what card data we're saving
-                error_log("STANDARD FORM - Saving billing info with card data:");
-                error_log("Card Number Last 4: " . $cardNumberLast4);
-                error_log("Card Holder Name: " . $cardHolderName);
-                error_log("Card Expiry Month: " . $cardExpiryMonth);
-                error_log("Card Expiry Year: " . $cardExpiryYear);
-                error_log("Card Type: " . $cardType);
-                
-                $billingStmt->bind_param("ssssssssssssss", 
-                    $firstName, $lastName, $email, $phone, $address, $city, $state, $zipCode, $paymentMethod,
-                    $cardNumberLast4, $cardHolderName, $cardExpiryMonth, $cardExpiryYear, $cardType
+                $billingStmt->bind_param("ssssssss", 
+                    $firstName, $lastName, $email, $phone, $address, $city, $zipCode, $paymentMethod
                 );
                 
                 if ($billingStmt->execute()) {
@@ -557,7 +698,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
         $customerName = $_POST['firstName'] . ' ' . $_POST['lastName'];
         $customerEmail = $_POST['email'];
         $customerPhone = $_POST['phone'];
-        $customerAddress = $_POST['address'] . ', ' . $_POST['city'] . ', ' . $_POST['state'] . ' ' . $_POST['zipCode'];
+        $customerAddress = $_POST['address'] . ', ' . $_POST['city'] . ' ' . $_POST['zipCode'];
         $paymentMethod = $_POST['paymentMethod'];
         
         // Calculate totals using unified function
@@ -583,7 +724,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
         $phone = $_POST['phone'];
         $address = $_POST['address'];
         $city = $_POST['city'];
-        $state = $_POST['state'];
         $zipCode = $_POST['zipCode'];
         $paymentMethod = $_POST['paymentMethod'];
         
@@ -637,23 +777,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
         error_log("Card Type: " . $cardType);
         
         // Insert billing information with card details
-        $billingStmt = $conn->prepare("INSERT INTO payment_billing_info (first_name, last_name, email, phone, address, city, state, zip_code, payment_method, card_number_last4, card_holder_name, card_expiry_month, card_expiry_year, card_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $billingStmt = $conn->prepare("INSERT INTO payment_billing_info (first_name, last_name, email, phone, address, city, zip_code, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         
-        $billingStmt->bind_param("ssssssssssssss", 
+        $billingStmt->bind_param("ssssssss", 
             $firstName,
             $lastName,
             $email,
             $phone,
             $address,
             $city,
-            $state,
             $zipCode,
-            $paymentMethod,
-            $cardNumberLast4,
-            $cardHolderName,
-            $cardExpiryMonth,
-            $cardExpiryYear,
-            $cardType
+            $paymentMethod
         );
         
         if ($billingStmt->execute()) {
@@ -750,6 +884,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
 
     <!-- SweetAlert2 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11.14.0/dist/sweetalert2.min.css" rel="stylesheet">
+
+    <!-- PayPal SDK -->
+    <script src="https://www.paypal.com/sdk/js?client-id=<?php echo PAYPAL_CLIENT_ID; ?>&currency=USD&intent=capture"></script>
 
     <style>
       * {
@@ -1040,6 +1177,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
         font-size: 2rem;
         margin-right: 15px;
         color: var(--primary-color);
+      }
+      
+      /* PayPal Specific Styles */
+      #paypalDetails {
+        background: rgba(0, 96, 169, 0.05);
+        border: 2px solid #0070ba;
+        border-radius: 15px;
+        padding: 30px;
+      }
+      
+      #paypal-button-container {
+        max-width: 400px;
+        margin: 0 auto;
+      }
+      
+      .paypal-info {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 15px 0;
+      }
+      
+      .bi-paypal {
+        color: #0070ba !important;
       }
 
       .security-badge {
@@ -1429,18 +1590,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
                         required
                       />
                     </div>
-                    <div class="col-md-3">
-                      <label for="state" class="form-label">State *</label>
-                      <select class="form-select" id="state" name="state" required>
-                        <option value="">Choose...</option>
-                        <option value="CA">California</option>
-                        <option value="NY">New York</option>
-                        <option value="TX">Texas</option>
-                        <option value="FL">Florida</option>
-                        <option value="IL">Illinois</option>
-                      </select>
-                    </div>
-                    <div class="col-md-3">
+                    <div class="col-md-6">
                       <label for="zipCode" class="form-label">ZIP Code *</label>
                       <input
                         type="text"
@@ -1459,34 +1609,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
                     <i class="bi bi-credit-card me-2"></i>Payment Method
                   </h5>
 
-                  <!-- Credit Card -->
-                  <div
-                    class="payment-method selected"
-                    onclick="selectPaymentMethod('card')"
-                  >
-                    <div class="d-flex align-items-center">
-                      <i class="bi bi-credit-card payment-icon"></i>
-                      <div>
-                        <h6 class="mb-1">Credit/Debit Card</h6>
-                        <small class="text-muted"
-                          >Visa, Mastercard, American Express</small
-                        >
-                      </div>
-                      <div class="ms-auto">
-                        <input
-                          class="form-check-input"
-                          type="radio"
-                          name="paymentMethod"
-                          value="card"
-                          checked
-                        />
-                      </div>
-                    </div>
-                  </div>
-
                   <!-- PayPal -->
                   <div
-                    class="payment-method"
+                    class="payment-method selected"
                     onclick="selectPaymentMethod('paypal')"
                   >
                     <div class="d-flex align-items-center">
@@ -1503,136 +1628,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
                           type="radio"
                           name="paymentMethod"
                           value="paypal"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Apple Pay -->
-                  <div
-                    class="payment-method"
-                    onclick="selectPaymentMethod('apple')"
-                  >
-                    <div class="d-flex align-items-center">
-                      <i class="bi bi-apple payment-icon"></i>
-                      <div>
-                        <h6 class="mb-1">Apple Pay</h6>
-                        <small class="text-muted">Touch ID or Face ID</small>
-                      </div>
-                      <div class="ms-auto">
-                        <input
-                          class="form-check-input"
-                          type="radio"
-                          name="paymentMethod"
-                          value="apple"
+                          checked
                         />
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <!-- Security Notice -->
-                <div class="card-security-info">
-                  <div class="secure-badge">
-                    <i class="bi bi-shield-check"></i>
-                    SSL Secured Payment
-                  </div>
-                  <h6><i class="bi bi-lock-fill me-2"></i>Your Payment is Secure</h6>
-                  <ul class="security-features">
-                    <li><i class="bi bi-check2"></i>256-bit SSL encryption</li>
-                    <li><i class="bi bi-check2"></i>PCI DSS compliant</li>
-                    <li><i class="bi bi-check2"></i>We never store full card numbers</li>
-                    <li><i class="bi bi-check2"></i>Industry-standard security protocols</li>
-                  </ul>
-                </div>
 
-                <!-- Card Details -->
-                <div class="mb-5" id="cardDetails">
-                  <h6 class="mb-3">Card Details</h6>
-                  <div class="row g-3">
-                    <div class="col-12">
-                      <label for="cardNumber" class="form-label"
-                        >Card Number *</label
-                      >
-                      <div class="card-input-group">
-                        <input
-                          type="text"
-                          class="form-control"
-                          id="cardNumber"
-                          name="cardNumber"
-                          placeholder="1234 5678 9012 3456"
-                          maxlength="19"
-                          required
-                        />
-                        <i
-                          class="bi bi-credit-card card-type-icon"
-                          id="cardTypeIcon"
-                        ></i>
-                      </div>
-                    </div>
-                    <div class="col-md-6">
-                      <label for="expiryDate" class="form-label"
-                        >Expiry Date *</label
-                      >
-                      <input
-                        type="text"
-                        class="form-control"
-                        id="expiryDate"
-                        name="expiryDate"
-                        placeholder="MM/YY"
-                        maxlength="5"
-                        required
-                      />
-                    </div>
-                    <div class="col-md-6">
-                      <label for="cvv" class="form-label">
-                        CVV * 
-                        <span class="cvv-help">
-                          <i class="bi bi-question-circle"></i>
-                          <div class="cvv-tooltip">
-                            <strong>What is CVV?</strong><br>
-                            The 3-digit security code on the back of your card (4 digits for Amex on the front).
-                          </div>
-                        </span>
-                      </label>
-                      <input
-                        type="text"
-                        class="form-control"
-                        id="cvv"
-                        name="cvv"
-                        placeholder="123"
-                        maxlength="4"
-                        required
-                      />
-                    </div>
-                    <div class="col-12">
-                      <label for="cardName" class="form-label"
-                        >Name on Card *</label
-                      >
-                      <input
-                        type="text"
-                        class="form-control"
-                        id="cardName"
-                        name="cardName"
-                        placeholder="John Doe"
-                        required
-                      />
+
+
+
+                <!-- PayPal Button Container -->
+                <div class="mb-5" id="paypalDetails">
+                  <div class="text-center">
+                    <h6 class="mb-3">Complete Payment with PayPal</h6>
+                    <p class="text-muted mb-4">You will be redirected to PayPal to complete your payment securely.</p>
+                    
+                    <!-- PayPal Button -->
+                    <div id="paypal-button-container" class="d-flex justify-content-center"></div>
+                    
+                    <div class="mt-3">
+                      <small class="text-muted">
+                        <i class="bi bi-shield-check me-1"></i>
+                        Secure payment processed by PayPal
+                      </small>
                     </div>
                   </div>
                 </div>
 
                 <!-- Additional Options -->
                 <div class="mb-4">
-                  <div class="form-check mb-3">
-                    <input
-                      class="form-check-input"
-                      type="checkbox"
-                      id="saveCard"
-                    />
-                    <label class="form-check-label" for="saveCard">
-                      Save card for future purchases
-                    </label>
-                  </div>
                   <div class="form-check mb-3">
                     <input
                       class="form-check-input"
@@ -1870,26 +1896,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
         }
       });
       
-      // Payment method selection
+      // Payment method selection (PayPal only)
       function selectPaymentMethod(method) {
-        // Remove selected class from all payment methods
-        document.querySelectorAll(".payment-method").forEach((pm) => {
-          pm.classList.remove("selected");
-        });
-
-        // Add selected class to clicked method
-        event.currentTarget.classList.add("selected");
-
-        // Check the radio button
-        document.querySelector(`input[value="${method}"]`).checked = true;
-
-        // Show/hide card details
-        const cardDetails = document.getElementById("cardDetails");
-        if (method === "card") {
-          cardDetails.style.display = "block";
-        } else {
-          cardDetails.style.display = "none";
+        // PayPal is the only option, so just ensure it's selected
+        document.querySelector('input[value="paypal"]').checked = true;
+        
+        // Initialize PayPal buttons
+        initializePayPalButtons();
+      }
+      
+      // Auto-initialize PayPal on page load
+      document.addEventListener('DOMContentLoaded', function() {
+        // Initialize PayPal buttons immediately since it's the only payment method
+        setTimeout(() => {
+          initializePayPalButtons();
+        }, 1000); // Small delay to ensure PayPal SDK is loaded
+      });
+      
+      // Initialize PayPal Buttons
+      function initializePayPalButtons() {
+        // Clear existing PayPal buttons
+        const container = document.getElementById('paypal-button-container');
+        container.innerHTML = '';
+        
+        // Get order total from the page
+        const totalElement = document.querySelector('.order-total');
+        let orderTotal = 0;
+        if (totalElement) {
+          const totalText = totalElement.textContent || totalElement.innerText;
+          const match = totalText.match(/\$([\d,]+\.\d{2})/);
+          if (match) {
+            orderTotal = parseFloat(match[1].replace(',', ''));
+          }
         }
+        
+        if (orderTotal <= 0) {
+          orderTotal = 100.00; // Fallback amount
+          console.warn('Could not determine order total, using fallback amount:', orderTotal);
+        }
+        
+        console.log('Initializing PayPal buttons with amount:', orderTotal);
+        
+        paypal.Buttons({
+          style: {
+            layout: 'vertical',
+            color: 'gold',
+            shape: 'rect',
+            label: 'paypal'
+          },
+          
+          createOrder: function(data, actions) {
+            return actions.order.create({
+              purchase_units: [{
+                amount: {
+                  value: orderTotal.toFixed(2),
+                  currency_code: 'USD'
+                },
+                description: 'Velvet Vogue E-commerce Purchase'
+              }]
+            });
+          },
+          
+          onApprove: function(data, actions) {
+            return actions.order.capture().then(function(details) {
+              console.log('PayPal payment successful:', details);
+              
+              // Show success message
+              Swal.fire({
+                title: 'Payment Successful!',
+                text: 'Your PayPal payment has been processed successfully.',
+                icon: 'success',
+                confirmButtonText: 'Continue'
+              }).then((result) => {
+                if (result.isConfirmed) {
+                  // Redirect to success page or handle success
+                  window.location.href = 'ProPayment.php?paypal_success=1&token=' + data.orderID + '&PayerID=' + data.payerID;
+                }
+              });
+            });
+          },
+          
+          onError: function(err) {
+            console.error('PayPal error:', err);
+            Swal.fire({
+              title: 'Payment Error',
+              text: 'There was an error processing your PayPal payment. Please try again.',
+              icon: 'error',
+              confirmButtonText: 'Try Again'
+            });
+          },
+          
+          onCancel: function(data) {
+            console.log('PayPal payment cancelled:', data);
+            Swal.fire({
+              title: 'Payment Cancelled',
+              text: 'PayPal payment was cancelled. You can try again.',
+              icon: 'info',
+              confirmButtonText: 'OK'
+            });
+          }
+        }).render('#paypal-button-container');
       }
 
       // Card number formatting
@@ -2049,7 +2155,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
           { id: 'phone', name: 'Phone Number' },
           { id: 'address', name: 'Address' },
           { id: 'city', name: 'City' },
-          { id: 'state', name: 'State' },
           { id: 'zipCode', name: 'ZIP Code' }
         ];
         
@@ -2152,7 +2257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
       });
 
       // Real-time validation for required fields
-      const requiredFieldIds = ['firstName', 'lastName', 'email', 'phone', 'address', 'city', 'state', 'zipCode'];
+      const requiredFieldIds = ['firstName', 'lastName', 'email', 'phone', 'address', 'city', 'zipCode'];
       
       requiredFieldIds.forEach(fieldId => {
         const field = document.getElementById(fieldId);
@@ -2726,13 +2831,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cart_data'])) {
           name: formData.get('fullName'),
           email: formData.get('email'),
           phone: formData.get('phone'),
-          address: `${formData.get('address')}, ${formData.get('city')}, ${formData.get('state')} ${formData.get('zipCode')}`
+          address: `${formData.get('address')}, ${formData.get('city')} ${formData.get('zipCode')}`
         };
 
         const paymentData = {
-          method: selectedPaymentMethod,
-          cardNumber: selectedPaymentMethod === 'card' ? formData.get('cardNumber') : null,
-          cardName: selectedPaymentMethod === 'card' ? formData.get('cardName') : null
+          method: selectedPaymentMethod
         };
 
         // Send AJAX request to process order
